@@ -1,0 +1,6 @@
+<resources>
+    <string name="app_name">PhotoPicker</string>
+
+    <string name="toast_photo_picker_max">最多只能选择 %1$s 张图片</string>
+    <string name="all_image">所有图片</string>
+</resources>

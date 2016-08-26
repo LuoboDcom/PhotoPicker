@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <declare-styleable name="YSImageView">
+        <attr name="android:src" />
+        <attr name="ys_iv_isCircle" format="boolean" />
+        <attr name="ys_iv_cornerRadius" format="reference|dimension" />
+        <attr name="ys_iv_isSquare" format="boolean" />
+        <attr name="ys_iv_borderWidth" format="reference|dimension" />
+        <attr name="ys_iv_borderColor" format="reference|color" />
+    </declare-styleable>
+</resources>
