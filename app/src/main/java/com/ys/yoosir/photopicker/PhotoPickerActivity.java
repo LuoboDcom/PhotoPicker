@@ -1,6 +1,10 @@
 package com.ys.yoosir.photopicker;
 
+import android.app.Dialog;
+import android.content.Context;
+import android.content.Intent;
 import android.os.PersistableBundle;
+import android.support.v4.view.ViewCompat;
 import android.support.v7.app.AppCompatActivity;
 import android.os.Bundle;
 import android.text.TextUtils;
@@ -15,11 +19,12 @@ import android.widget.RelativeLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import com.nostra13.universalimageloader.core.DisplayImageOptions;
-import com.nostra13.universalimageloader.core.assist.ImageSize;
 import com.ys.yoosir.photopicker.imageloader.MQImage;
 import com.ys.yoosir.photopicker.model.ImageFolderModel;
+import com.ys.yoosir.photopicker.util.MQAsyncTask;
+import com.ys.yoosir.photopicker.util.MQLoadPhotoTask;
 import com.ys.yoosir.photopicker.util.YSImageCaptureManager;
+import com.ys.yoosir.photopicker.widget.MQPhotoFolderPw;
 import com.ys.yoosir.photopicker.widget.YSImageView;
 
 import java.io.File;
@@ -28,7 +33,7 @@ import java.util.ArrayList;
 /**
  *  相册图片选择器
  */
-public class PhotoPickerActivity extends AppCompatActivity implements View.OnClickListener,AdapterView.OnItemClickListener{
+public class PhotoPickerActivity extends AppCompatActivity implements View.OnClickListener,AdapterView.OnItemClickListener,MQAsyncTask.Callback<ArrayList<ImageFolderModel>>{
 
     //拍照的请求码
     private static final int REQUEST_CODE_TAKE_PHOTO = 1;
@@ -57,7 +62,27 @@ public class PhotoPickerActivity extends AppCompatActivity implements View.OnCli
      */
     private ArrayList<ImageFolderModel> mImageFolderModels;
 
+    private MQPhotoFolderPw mPhotoFolderPw;
+
     private int displayWidth;
+
+    /**
+     *  上一次显示图片目录的时间戳，防止短时间内重复点击图片目录菜单时界面错乱
+     */
+    private long mLastShowPhotoFolderTime;
+    private MQLoadPhotoTask mLoadPhotoTask;
+    private Dialog mLoadingDialog;
+
+
+    public static Intent newIntent(Context context, File imageDir, int maxChooseCount, ArrayList<String> selectedImages, String topRightBtnText){
+        Intent intent = new Intent(context, PhotoPickerActivity.class);
+        intent.putExtra(EXTRA_IMAGE_DIR, imageDir);
+        intent.putExtra(EXTRA_MAX_CHOOSE_COUNT, maxChooseCount);
+        intent.putStringArrayListExtra(EXTRA_SELECTED_IMAGES, selectedImages);
+        intent.putExtra(EXTRA_TOP_RIGHT_BTN_TEXT, topRightBtnText);
+        return intent;
+    }
+
 
     @Override
     public void onSaveInstanceState(Bundle outState, PersistableBundle outPersistentState) {
@@ -79,8 +104,27 @@ public class PhotoPickerActivity extends AppCompatActivity implements View.OnCli
     protected void onStart() {
         super.onStart();
         //TODO 显示加载等待框
+        showLoadingDialog();
+        mLoadPhotoTask = new MQLoadPhotoTask(this,this,mTakePhotoEnabled).perform();
 
     }
+
+    //加载 loading 效果
+    private void showLoadingDialog() {
+        if(mLoadingDialog == null){
+            mLoadingDialog = new Dialog(this,R.style.MQDialog);
+            mLoadingDialog.setContentView(R.layout.dialog_loading_photopicker);
+            mLoadingDialog.setCancelable(false);
+        }
+        mLoadingDialog.show();
+    }
+
+    private void dismissLoadingDialog(){
+        if(mLoadingDialog != null && mLoadingDialog.isShowing()){
+            mLoadingDialog.dismiss();
+        }
+    }
+
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -90,6 +134,13 @@ public class PhotoPickerActivity extends AppCompatActivity implements View.OnCli
         initView();
         initListener();
         processLogic(savedInstanceState);
+    }
+
+    @Override
+    protected void onDestroy() {
+        dismissLoadingDialog();
+        cancelLoadPhotoTask();
+        super.onDestroy();
     }
 
     private RelativeLayout          titleView;
@@ -115,7 +166,70 @@ public class PhotoPickerActivity extends AppCompatActivity implements View.OnCli
 
     @Override
     public void onClick(View view) {
+        switch (view.getId()){
+            case R.id.back_iv:
+                onBackPressed();
+                break;
+            case R.id.folder_ll:
+                if(System.currentTimeMillis() - mLastShowPhotoFolderTime > MQPhotoFolderPw.ANIM_DURATION){
+                    showPhotoFolderPw();
+                    mLastShowPhotoFolderTime = System.currentTimeMillis();
+                }
+                break;
+            case R.id.submit_tv:
+                returnSelectedImages(mPicturePickerAdapter.getSelectedImages());
+                break;
+        }
+    }
 
+    /**
+     *  返回已选中的图片集合
+     *
+     * @param selectedImages  被选中的图片集合
+     */
+    private void returnSelectedImages(ArrayList<String> selectedImages) {
+        Intent intent = new Intent();
+        intent.putStringArrayListExtra(EXTRA_SELECTED_IMAGES,selectedImages);
+        setResult(RESULT_OK,intent);
+        finish();
+    }
+
+    /**
+     *  显示图集目录界面
+     */
+    private void showPhotoFolderPw() {
+        if(mPhotoFolderPw == null){
+            mPhotoFolderPw = new MQPhotoFolderPw(this, titleView, new MQPhotoFolderPw.Callback() {
+                @Override
+                public void onSelectedFolder(int position) {
+                    reloadPhotos(position);
+                }
+
+                @Override
+                public void executeDismissAnim() {
+                    ViewCompat.animate(arrowIV)
+                            .setDuration(MQPhotoFolderPw.ANIM_DURATION)
+                            .rotation(0)
+                            .start();
+                }
+            });
+        }
+        mPhotoFolderPw.setDatas(mImageFolderModels);
+        mPhotoFolderPw.show();
+
+        ViewCompat.animate(arrowIV).setDuration(MQPhotoFolderPw.ANIM_DURATION).rotation(-180).start();
+    }
+
+    /**
+     *  重新加载图片
+     * @param position 当前目录index
+     */
+    private void reloadPhotos(int position) {
+        if(position < mImageFolderModels.size()){
+            mCurrentImageFolderModel = mImageFolderModels.get(position);
+            titleTV.setText(mCurrentImageFolderModel.name);
+            mPicturePickerAdapter.setData(mCurrentImageFolderModel.getImages());
+        }
     }
 
     @Override
@@ -219,6 +333,37 @@ public class PhotoPickerActivity extends AppCompatActivity implements View.OnCli
         }
     }
 
+    /**
+     *  获取本地图片目录完成
+     * @param imageFolderModels 图片目录集合
+     */
+    @Override
+    public void onPostExecute(ArrayList<ImageFolderModel> imageFolderModels) {
+        dismissLoadingDialog();
+        mLoadPhotoTask = null;
+        mImageFolderModels = imageFolderModels;
+        reloadPhotos(mPhotoFolderPw == null ? 0 : mPhotoFolderPw.getCurrentPosition());
+    }
+
+    /**
+     *  已取消加载本地相册回调
+     */
+    @Override
+    public void onTaskCancelled() {
+        dismissLoadingDialog();
+        mLoadPhotoTask = null;
+    }
+
+    /**
+     *  取消加载本地相册任务
+     */
+    private void cancelLoadPhotoTask(){
+        if(mLoadPhotoTask != null){
+            mLoadPhotoTask.cancelTask();
+            mLoadPhotoTask = null;
+        }
+    }
+
 
     private class PicturePickerAdapter extends BaseAdapter {
 
@@ -226,19 +371,11 @@ public class PhotoPickerActivity extends AppCompatActivity implements View.OnCli
         private ArrayList<String> mDatas;
         private int mImageWidth;
         private int mImageHeight;
-        private DisplayImageOptions options;
-        private ImageSize mImageSize;
 
         public PicturePickerAdapter(int displayWidth){
             mDatas = new ArrayList<>();
             mImageWidth = displayWidth / 10;
             mImageHeight = mImageWidth;
-            options = new DisplayImageOptions.Builder()
-                    .showImageOnLoading(R.mipmap.ic_holder_dark)
-                    .showImageOnFail(R.mipmap.ic_holder_dark)
-                    .cacheInMemory(true)
-                    .build();
-            mImageSize = new ImageSize(mImageWidth,mImageHeight);
         }
 
         @Override
@@ -351,8 +488,11 @@ public class PhotoPickerActivity extends AppCompatActivity implements View.OnCli
             return mSelectedImages;
         }
 
-        public void setSelectedImages(ArrayList<String> mSelectedImages) {
-            this.mSelectedImages = mSelectedImages;
+        public void setSelectedImages(ArrayList<String> selectedImages) {
+            if (selectedImages != null) {
+                mSelectedImages = selectedImages;
+            }
+            notifyDataSetChanged();
         }
 
         public int getSelectedCount(){
