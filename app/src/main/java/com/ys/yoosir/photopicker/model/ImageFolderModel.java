@@ -26,7 +26,7 @@ public class ImageFolderModel {
         this.coverPath = coverPath;
     }
 
-    public boolean isTakePotoEnabled() {
+    public boolean isTakePhotoEnabled() {
         return mTakePotoEnabled;
     }
 

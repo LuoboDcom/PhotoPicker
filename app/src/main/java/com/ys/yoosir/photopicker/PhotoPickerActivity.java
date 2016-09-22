@@ -35,10 +35,25 @@ import java.util.ArrayList;
  */
 public class PhotoPickerActivity extends AppCompatActivity implements View.OnClickListener,AdapterView.OnItemClickListener,MQAsyncTask.Callback<ArrayList<ImageFolderModel>>{
 
-    //拍照的请求码
+    private static final String EXTRA_IMAGE_DIR = "EXTRA_IMAGE_DIR";
+    private static final String EXTRA_SELECTED_IMAGES = "EXTRA_SELECTED_IMAGES";
+    private static final String EXTRA_MAX_CHOOSE_COUNT = "EXTRA_MAX_CHOOSE_COUNT";
+    private static final String EXTRA_TOP_RIGHT_BTN_TEXT = "EXTRA_TOP_RIGHT_BTN_TEXT";
+
+    /**
+     *拍照的请求码
+     */
     private static final int REQUEST_CODE_TAKE_PHOTO = 1;
-    //预览照片的请求码
+    /**
+     * 预览照片的请求码
+     */
     private static final int REQUEST_CODE_PREVIEW = 2;
+
+    private RelativeLayout          titleView;
+    private TextView                titleTV;
+    private ImageView               arrowIV;
+    private TextView                submitTv;
+    private GridView                contentGV;
 
     private ImageFolderModel mCurrentImageFolderModel;
 
@@ -62,9 +77,11 @@ public class PhotoPickerActivity extends AppCompatActivity implements View.OnCli
      */
     private ArrayList<ImageFolderModel> mImageFolderModels;
 
-    private MQPhotoFolderPw mPhotoFolderPw;
+    private PicturePickerAdapter mPicturePickerAdapter;
 
-    private int displayWidth;
+    private YSImageCaptureManager mImageCaptureManager;
+
+    private MQPhotoFolderPw mPhotoFolderPw;
 
     /**
      *  上一次显示图片目录的时间戳，防止短时间内重复点击图片目录菜单时界面错乱
@@ -73,7 +90,16 @@ public class PhotoPickerActivity extends AppCompatActivity implements View.OnCli
     private MQLoadPhotoTask mLoadPhotoTask;
     private Dialog mLoadingDialog;
 
+    private int displayWidth;
 
+    /**
+     * @param context         应用程序上下文
+     * @param imageDir        拍照后图片保存的目录。如果传null表示没有拍照功能，如果不为null则具有拍照功能，
+     * @param maxChooseCount  图片选择张数的最大值
+     * @param selectedImages  当前已选中的图片路径集合，可以传null
+     * @param topRightBtnText 右上角按钮的文本
+     * @return
+     */
     public static Intent newIntent(Context context, File imageDir, int maxChooseCount, ArrayList<String> selectedImages, String topRightBtnText){
         Intent intent = new Intent(context, PhotoPickerActivity.class);
         intent.putExtra(EXTRA_IMAGE_DIR, imageDir);
@@ -83,21 +109,65 @@ public class PhotoPickerActivity extends AppCompatActivity implements View.OnCli
         return intent;
     }
 
-
-    @Override
-    public void onSaveInstanceState(Bundle outState, PersistableBundle outPersistentState) {
-        if(mTakePhotoEnabled){
-            mImageCaptureManager.onSaveInstanceState(outState);
-        }
-        super.onSaveInstanceState(outState, outPersistentState);
+    /**
+     * 获取已选择的图片集合
+     *
+     * @param intent
+     * @return
+     */
+    public static ArrayList<String> getSelectedImages(Intent intent) {
+        return intent.getStringArrayListExtra(EXTRA_SELECTED_IMAGES);
     }
 
     @Override
-    public void onRestoreInstanceState(Bundle savedInstanceState, PersistableBundle persistentState) {
-        if(mTakePhotoEnabled){
-            mImageCaptureManager.onRestoreInstanceState(savedInstanceState);
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        displayWidth = getResources().getDisplayMetrics().widthPixels;
+        initView();
+        initListener();
+        processLogic(savedInstanceState);
+    }
+
+    private void initView() {
+        setContentView(R.layout.activity_photo_picker);
+        titleView = (RelativeLayout) findViewById(R.id.title_rl);
+        titleTV = (TextView) findViewById(R.id.title_tv);
+        arrowIV = (ImageView) findViewById(R.id.arrow_iv);
+        submitTv = (TextView) findViewById(R.id.submit_tv);
+        contentGV = (GridView) findViewById(R.id.content_gv);
+    }
+
+    private void initListener() {
+        findViewById(R.id.back_iv).setOnClickListener(this);
+        findViewById(R.id.folder_ll).setOnClickListener(this);
+        submitTv.setOnClickListener(this);
+        contentGV.setOnItemClickListener(this);
+    }
+
+    private void processLogic(Bundle savedInstanceState) {
+        //获取拍照图片保存目录
+        File imageDir = (File) getIntent().getSerializableExtra(EXTRA_IMAGE_DIR);
+        if(imageDir != null){
+            mTakePhotoEnabled = true;
+            mImageCaptureManager = new YSImageCaptureManager(this,imageDir);
         }
-        super.onRestoreInstanceState(savedInstanceState, persistentState);
+        //获取图片选择的最大张数
+        mMaxChooseCount = getIntent().getIntExtra(EXTRA_MAX_CHOOSE_COUNT,1);
+        if(mMaxChooseCount < 1){
+            mMaxChooseCount = 1;
+        }
+
+        //获取右上角按钮文本
+        mTopRightBtnText = getIntent().getStringExtra(EXTRA_TOP_RIGHT_BTN_TEXT);
+
+        //适配器
+        mPicturePickerAdapter = new PicturePickerAdapter(displayWidth);
+        mPicturePickerAdapter.setSelectedImages(getIntent().getStringArrayListExtra(EXTRA_SELECTED_IMAGES));
+        contentGV.setAdapter(mPicturePickerAdapter);
+
+        renderTopRightBtn();
+
+        titleTV.setText(R.string.all_image);
     }
 
     @Override
@@ -106,7 +176,6 @@ public class PhotoPickerActivity extends AppCompatActivity implements View.OnCli
         //TODO 显示加载等待框
         showLoadingDialog();
         mLoadPhotoTask = new MQLoadPhotoTask(this,this,mTakePhotoEnabled).perform();
-
     }
 
     //加载 loading 效果
@@ -123,45 +192,6 @@ public class PhotoPickerActivity extends AppCompatActivity implements View.OnCli
         if(mLoadingDialog != null && mLoadingDialog.isShowing()){
             mLoadingDialog.dismiss();
         }
-    }
-
-
-    @Override
-    protected void onCreate(Bundle savedInstanceState) {
-        super.onCreate(savedInstanceState);
-        displayWidth = getResources().getDisplayMetrics().widthPixels;
-        setContentView(R.layout.activity_photo_picker);
-        initView();
-        initListener();
-        processLogic(savedInstanceState);
-    }
-
-    @Override
-    protected void onDestroy() {
-        dismissLoadingDialog();
-        cancelLoadPhotoTask();
-        super.onDestroy();
-    }
-
-    private RelativeLayout          titleView;
-    private TextView                titleTV;
-    private ImageView               arrowIV;
-    private TextView                submitTv;
-    private GridView                contentGV;
-
-    private void initView() {
-        titleView = (RelativeLayout) findViewById(R.id.title_rl);
-        titleTV = (TextView) findViewById(R.id.title_tv);
-        arrowIV = (ImageView) findViewById(R.id.arrow_iv);
-        submitTv = (TextView) findViewById(R.id.submit_tv);
-        contentGV = (GridView) findViewById(R.id.content_gv);
-    }
-
-    private void initListener() {
-        findViewById(R.id.back_iv).setOnClickListener(this);
-        findViewById(R.id.folder_ll).setOnClickListener(this);
-        submitTv.setOnClickListener(this);
-        contentGV.setOnItemClickListener(this);
     }
 
     @Override
@@ -220,30 +250,18 @@ public class PhotoPickerActivity extends AppCompatActivity implements View.OnCli
         ViewCompat.animate(arrowIV).setDuration(MQPhotoFolderPw.ANIM_DURATION).rotation(-180).start();
     }
 
-    /**
-     *  重新加载图片
-     * @param position 当前目录index
-     */
-    private void reloadPhotos(int position) {
-        if(position < mImageFolderModels.size()){
-            mCurrentImageFolderModel = mImageFolderModels.get(position);
-            titleTV.setText(mCurrentImageFolderModel.name);
-            mPicturePickerAdapter.setData(mCurrentImageFolderModel.getImages());
-        }
-    }
-
     @Override
     public void onItemClick(AdapterView<?> adapterView, View view, int position, long id) {
         if(mMaxChooseCount == 1){
             //单选
-            if(mCurrentImageFolderModel.isTakePotoEnabled() && position == 0){
+            if(mCurrentImageFolderModel.isTakePhotoEnabled() && position == 0){
                 takePhoto();
             }else{
                 changeToPreview(position);
             }
         }else{
             //多选
-            if(mCurrentImageFolderModel.isTakePotoEnabled() && position == 0){
+            if(mCurrentImageFolderModel.isTakePhotoEnabled() && position == 0){
                 if(mPicturePickerAdapter.getSelectedCount() == mMaxChooseCount){
                     toastMaxCountTip();
                 }else{
@@ -255,40 +273,24 @@ public class PhotoPickerActivity extends AppCompatActivity implements View.OnCli
         }
     }
 
-    private static final String EXTRA_IMAGE_DIR = "EXTRA_IMAGE_DIR";
-    private static final String EXTRA_MAX_CHOOSE_COUNT = "EXTRA_MAX_CHOOSE_COUNT";
-    private static final String EXTRA_TOP_RIGHT_BTN_TEXT = "EXTRA_TOP_RIGHT_BTN_TEXT";
-    private static final String EXTRA_SELECTED_IMAGES = "EXTRA_SELECTED_IMAGES";
-
-    private YSImageCaptureManager mImageCaptureManager;
-    private PicturePickerAdapter mPicturePickerAdapter;
-
-    private void processLogic(Bundle savedInstanceState) {
-        //获取拍照图片保存目录
-        File imageDir = (File) getIntent().getSerializableExtra(EXTRA_IMAGE_DIR);
-        if(imageDir != null){
-            mTakePhotoEnabled = true;
-            mImageCaptureManager = new YSImageCaptureManager(this,imageDir);
+    /**
+     *  跳转到图片选择预览图片
+     * @param position  当前点击的item的索引位置
+     */
+    private void changeToPreview(int position){
+        int currentPosition = position;
+        if (mCurrentImageFolderModel.isTakePhotoEnabled()) {
+            currentPosition--;
         }
-        //获取图片选择的最大张数
-        mMaxChooseCount = getIntent().getIntExtra(EXTRA_MAX_CHOOSE_COUNT,1);
-        if(mMaxChooseCount < 1){
-            mMaxChooseCount = 1;
-        }
-
-        //获取右上角按钮文本
-        mTopRightBtnText = getIntent().getStringExtra(EXTRA_TOP_RIGHT_BTN_TEXT);
-
-        //适配器
-        mPicturePickerAdapter = new PicturePickerAdapter(displayWidth);
-        mPicturePickerAdapter.setSelectedImages(getIntent().getStringArrayListExtra(EXTRA_SELECTED_IMAGES));
-        contentGV.setAdapter(mPicturePickerAdapter);
-
-        renderTopRightBtn();
-
-        titleTV.setText(R.string.all_image);
+        startActivityForResult(PhotoPickerPreviewActivity.newIntent(this, mMaxChooseCount, mPicturePickerAdapter.getSelectedImages(), mPicturePickerAdapter.getData(), currentPosition, mTopRightBtnText, false), REQUEST_CODE_PREVIEW);
     }
 
+    /**
+     *  显示提示信息
+     */
+    private void toastMaxCountTip(){
+        Toast.makeText(PhotoPickerActivity.this,getString(R.string.toast_photo_picker_max,mMaxChooseCount),Toast.LENGTH_SHORT).show();
+    }
 
     /**
      *  拍照
@@ -301,23 +303,35 @@ public class PhotoPickerActivity extends AppCompatActivity implements View.OnCli
         }
     }
 
-    /**
-     *  跳转到图片选择预览图片
-     * @param position  当前点击的item的索引位置
-     */
-    private void changeToPreview(int position){
-//        int currentPosition = position;
-//        if(mCurrentImageFolderModel.isTakePotoEnabled()){
-//            currentPosition--;
-//        }
-//        startActivityForResult();
-    }
-
-    /**
-     *  显示提示信息
-     */
-    private void toastMaxCountTip(){
-        Toast.makeText(PhotoPickerActivity.this,getString(R.string.toast_photo_picker_max,mMaxChooseCount),Toast.LENGTH_SHORT).show();
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        switch(requestCode){
+            case REQUEST_CODE_TAKE_PHOTO:
+                if(resultCode == RESULT_OK){
+                    ArrayList<String> photos = new ArrayList<>();
+                    photos.add(mImageCaptureManager.getCurrentPhotoPath());
+                    startActivityForResult(PhotoPickerPreviewActivity.newIntent(this, 1, photos, photos, 0, mTopRightBtnText, true), REQUEST_CODE_PREVIEW);
+                }
+                break;
+            case REQUEST_CODE_PREVIEW:
+                if(resultCode == RESULT_OK) {
+                    if (PhotoPickerPreviewActivity.getIsFromTakePhoto(data)) {
+                        // 从拍照预览界面返回，刷新图库
+                        mImageCaptureManager.refreshGallery();
+                    }
+                    returnSelectedImages(PhotoPickerPreviewActivity.getSelectedImages(data));
+                }else {
+                    if (PhotoPickerPreviewActivity.getIsFromTakePhoto(data)) {
+                        // 从拍照预览界面返回，删除之前拍的照片
+                        mImageCaptureManager.deletePhotoFile();
+                    } else {
+                        mPicturePickerAdapter.setSelectedImages(PhotoPickerPreviewActivity.getSelectedImages(data));
+                        renderTopRightBtn();
+                    }
+                }
+                break;
+        }
     }
 
     /**
@@ -330,6 +344,34 @@ public class PhotoPickerActivity extends AppCompatActivity implements View.OnCli
         }else{
             submitTv.setEnabled(true);
             submitTv.setText(mTopRightBtnText + "(" + mPicturePickerAdapter.getSelectedCount() + "/" + mMaxChooseCount + ")");
+        }
+    }
+
+    @Override
+    public void onSaveInstanceState(Bundle outState, PersistableBundle outPersistentState) {
+        if(mTakePhotoEnabled){
+            mImageCaptureManager.onSaveInstanceState(outState);
+        }
+        super.onSaveInstanceState(outState, outPersistentState);
+    }
+
+    @Override
+    public void onRestoreInstanceState(Bundle savedInstanceState, PersistableBundle persistentState) {
+        if(mTakePhotoEnabled){
+            mImageCaptureManager.onRestoreInstanceState(savedInstanceState);
+        }
+        super.onRestoreInstanceState(savedInstanceState, persistentState);
+    }
+
+    /**
+     *  重新加载图片
+     * @param position 当前目录index
+     */
+    private void reloadPhotos(int position) {
+        if(position < mImageFolderModels.size()){
+            mCurrentImageFolderModel = mImageFolderModels.get(position);
+            titleTV.setText(mCurrentImageFolderModel.name);
+            mPicturePickerAdapter.setData(mCurrentImageFolderModel.getImages());
         }
     }
 
@@ -364,6 +406,13 @@ public class PhotoPickerActivity extends AppCompatActivity implements View.OnCli
         }
     }
 
+    @Override
+    protected void onDestroy() {
+        dismissLoadingDialog();
+        cancelLoadPhotoTask();
+        super.onDestroy();
+    }
+
 
     private class PicturePickerAdapter extends BaseAdapter {
 
@@ -384,13 +433,13 @@ public class PhotoPickerActivity extends AppCompatActivity implements View.OnCli
         }
 
         @Override
-        public Object getItem(int i) {
-            return mDatas.get(i);
+        public Object getItem(int position) {
+            return mDatas.get(position);
         }
 
         @Override
-        public long getItemId(int i) {
-            return i;
+        public long getItemId(int position) {
+            return position;
         }
 
         @Override
@@ -409,7 +458,7 @@ public class PhotoPickerActivity extends AppCompatActivity implements View.OnCli
             }
 
             String imagePath = (String) getItem(position);
-            if(mCurrentImageFolderModel.isTakePotoEnabled() && position == 0){
+            if(mCurrentImageFolderModel.isTakePhotoEnabled() && position == 0){
                 picViewHolder.tipTV .setVisibility(View.VISIBLE);
                 picViewHolder.photoIV.setScaleType(ImageView.ScaleType.CENTER);
                 picViewHolder.photoIV.setImageResource(R.mipmap.ic_gallery_camera);
@@ -484,15 +533,15 @@ public class PhotoPickerActivity extends AppCompatActivity implements View.OnCli
             return mDatas;
         }
 
-        public ArrayList<String> getSelectedImages() {
-            return mSelectedImages;
-        }
-
         public void setSelectedImages(ArrayList<String> selectedImages) {
             if (selectedImages != null) {
                 mSelectedImages = selectedImages;
             }
             notifyDataSetChanged();
+        }
+
+        public ArrayList<String> getSelectedImages() {
+            return mSelectedImages;
         }
 
         public int getSelectedCount(){
